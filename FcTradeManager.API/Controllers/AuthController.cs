@@ -31,7 +31,7 @@ public class AuthController : ControllerBase
         }
         catch (DbUpdateException)
         {
-            return Conflict(new { message = "This email is already in use." });
+            return Conflict(new { message = "This email/username is already in use." }); // edge case in which 2 users try to register with the same email/username at the same time
         }
     }
 

@@ -5,7 +5,7 @@
 POST {{FcTradeManager.API_HostAddress}}/api/auth/register
 Content-Type: application/json
 
-{ "email": "teste@exemplo.com", "password": "senha1234" }
+{ "email": "teste@exemplo.com", "username": "teste12_, "displayName": "Teste", "password": "senha1234" }
 
 ### Login
 POST {{FcTradeManager.API_HostAddress}}/api/auth/login

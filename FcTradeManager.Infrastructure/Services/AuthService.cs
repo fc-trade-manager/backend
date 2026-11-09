@@ -56,16 +56,21 @@ public class AuthService : IAuthService
 
     public async Task<AuthResponseDto> RegisterAsync(RegisterDto dto)
     {
-        var existingUser = await _context.Users
-            .AnyAsync(u => u.Email.ToLower() == dto.Email.ToLower());
+        var email = dto.Email.Trim().ToLowerInvariant();
+        var username = dto.Username.Trim().ToLowerInvariant();
 
-        if (existingUser)
+        if (await _context.Users.AnyAsync(u => u.Email == email))
             throw new InvalidOperationException("This e-mail is already registered.");
+
+        if (await _context.Users.AnyAsync(u => u.Username == username))
+            throw new InvalidOperationException("This username is already taken.");
 
         var user = new User
         {
             Id = Guid.NewGuid(),
-            Email = dto.Email.ToLower(),
+            Email = email,
+            Username = username,
+            DisplayName = dto.DisplayName.Trim(),
             PasswordHash = BCrypt.Net.BCrypt.HashPassword(dto.Password),
             CreatedAt = DateTime.UtcNow
         };
@@ -79,7 +84,7 @@ public class AuthService : IAuthService
     public async Task<AuthResponseDto> LoginAsync(LoginDto dto)
     {
         var user = await _context.Users
-            .FirstOrDefaultAsync(u => u.Email.ToLower() == dto.Email.ToLower());
+            .FirstOrDefaultAsync(u => u.Email == dto.Email.Trim().ToLowerInvariant());
 
         if (user == null || !BCrypt.Net.BCrypt.Verify(dto.Password, user.PasswordHash))
             throw new UnauthorizedAccessException("Invalid e-mail or password.");
@@ -155,6 +160,8 @@ public class AuthService : IAuthService
         {
             UserId = user.Id,
             Email = user.Email,
+            Username = user.Username,
+            DisplayName = user.DisplayName,
             Token = accessToken,
             ExpiresAt = expiresAt,
             RefreshToken = rawRefresh
