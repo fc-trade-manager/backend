@@ -6,9 +6,9 @@ namespace FcTradeManager.Tests.Support;
 
 public static class Seed
 {
-    public static User AddUser(AppDbContext db, string email = "user@test.com")
+    public static User AddUser(AppDbContext db, string email = "user@test.com", string? username = null)
     {
-        var user = new User { Id = Guid.NewGuid(), Email = email, PasswordHash = "hash" };
+        var user = new User { Id = Guid.NewGuid(), Email = email, Username = username ?? $"user_{Guid.NewGuid():N}"[..20], PasswordHash = "hash" };
         db.Users.Add(user);
         db.SaveChanges();
         return user;

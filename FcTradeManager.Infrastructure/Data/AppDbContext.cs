@@ -20,8 +20,19 @@ public class AppDbContext : DbContext
         base.OnModelCreating(modelBuilder);
 
         modelBuilder.Entity<User>()
-        .HasIndex(u => u.Email)
-        .IsUnique();
+            .HasIndex(u => u.Email)
+            .IsUnique();
+        modelBuilder.Entity<User>()
+            .Property(u => u.Username)
+            .IsRequired()
+            .HasMaxLength(20);
+        modelBuilder.Entity<User>()
+            .Property(u => u.DisplayName)
+            .IsRequired()
+            .HasMaxLength(40);
+        modelBuilder.Entity<User>()
+            .HasIndex(u => u.Username)
+            .IsUnique();
 
         // RNF05
         modelBuilder.Entity<PriceSnapshot>()
