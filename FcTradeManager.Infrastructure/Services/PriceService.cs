@@ -2,6 +2,7 @@ using FcTradeManager.Domain.Enums;
 using FcTradeManager.Application.DTOs;
 using FcTradeManager.Application.Interfaces;
 using FcTradeManager.Domain.Entities;
+using FcTradeManager.Domain.Rules;
 using FcTradeManager.Infrastructure.Data;
 using Microsoft.EntityFrameworkCore;
 
@@ -64,7 +65,7 @@ public class PriceService : IPriceService
 
         query = query.Where(p => p.RecordedAt >= cutoffDate);
 
-        return await query
+        var history = await query
             .OrderBy(p => p.RecordedAt)
             .Select(p => new PriceSnapshotResponseDto
             {
@@ -75,5 +76,14 @@ public class PriceService : IPriceService
                 RecordedAt = p.RecordedAt
             })
             .ToListAsync();
+
+        // RN10: a manual price prevails over a simulated one at the same minute
+        var manualMinutes = history
+            .Where(p => p.Source == PriceSource.Manual)
+            .Select(p => PriceSimulationRules.MinuteKey(p.RecordedAt))
+            .ToHashSet();
+
+        return history.Where(p =>
+            p.Source == PriceSource.Manual || !manualMinutes.Contains(PriceSimulationRules.MinuteKey(p.RecordedAt)));
     }
 }

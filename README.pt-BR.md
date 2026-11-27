@@ -9,7 +9,7 @@
 
 API REST para acompanhar cartas do **EA SPORTS FC Ultimate Team** como uma carteira de trades: mantenha uma watchlist com preços-alvo, guarde o histórico de preços, registre compras e vendas com o lucro calculado **já descontada a taxa do mercado** e receba **alertas** quando um preço atinge a meta.
 
-Projeto de portfólio. O front-end em React ficará em outro repositório (planejado).
+Projeto de portfólio. O front-end em React fica em outro repositório: [fc-trade-manager/frontend](https://github.com/fc-trade-manager/frontend).
 
 > **Projeto de fã, não oficial.** Não tem afiliação, endosso ou ligação com a Electronic Arts. O catálogo de cartas (`Data/cards.csv`) é **ilustrativo** e todos os preços simulados são fictícios.
 
@@ -37,7 +37,7 @@ Projeto de portfólio. O front-end em React ficará em outro repositório (plane
 | --- | --- |
 | Autenticação | Cadastro (e-mail, nome de usuário, nome de exibição, senha) e login; JWT de curta duração com refresh token rotativo |
 | Catálogo | Cartas carregadas de um CSV, busca pública com filtros e paginação |
-| Preços | Snapshots de preço por carta (`manual` ou `simulated`) com histórico de 24h / 7d / 30d |
+| Preços | Snapshots de preço por carta (`manual` ou `simulated`) com histórico de 24h / 7d / 30d; o histórico simulado é mantido atualizado a cada hora enquanto a API roda |
 | Watchlist | Cartas com metas de compra/venda, último preço, variação em 24h e distância até cada meta |
 | Trades | Compras e vendas com lucro calculado após a taxa de 5%; editar e apagar com checagem de consistência |
 | Dashboard | Lucro total, melhor e pior venda, posições abertas |
@@ -54,7 +54,7 @@ O raciocínio por trás das regras (as regras em si estão em [Regras de negóci
 Não existe API pública de preços de mercado do Ultimate Team, e as regras da EA desencorajam apps de terceiros que acessem os servidores do jogo. Scraping é frágil e pode violar termos. Por isso o sistema não depende de fonte externa: todo preço é guardado como um **snapshot** imutável (`Price`, `RecordedAt`, `Source`).
 
 - `manual`: registrado por um usuário em `POST /api/cards/{cardId}/prices`.
-- `simulated`: histórico fictício criado para desenvolvimento e demonstração por um script separado (veja [Dados de demonstração](#dados-de-demonstração-preços)). A coluna existe para distinguir e substituir os dados simulados sem nunca tocar nos preços manuais.
+- `simulated`: preços fictícios para desenvolvimento e demonstração. Os primeiros 30 dias são criados por um script separado (veja [Dados de demonstração](#dados-de-demonstração-preços)) e depois continuados pela própria API (veja a decisão 9). A coluna existe para distinguir e substituir os dados simulados sem nunca tocar nos preços manuais.
 - O "preço atual" de uma carta é sempre o seu **último snapshot**, por mais antigo que seja.
 
 ### 2. O lucro segue a economia do jogo: taxa de 5% e preço médio
@@ -86,6 +86,7 @@ Um serviço em segundo plano avalia cada item da watchlist a cada minuto contra 
 ```mermaid
 flowchart LR
     A["Preço registrado<br/>POST /api/cards/{id}/prices"] --> B[("PriceSnapshots")]
+    S["PriceSimulationBackgroundService<br/>um preço por carta a cada hora cheia"] --> B
     C["PriceAlertBackgroundService<br/>a cada 1 minuto"] -->|"último preço por carta observada"| B
     C --> D{"AlertRules.Evaluate"}
     D -->|"condição verdadeira e flag desligada"| E["Cria Alert<br/>flag = ligada"]
@@ -109,7 +110,19 @@ A watchlist mostra quanto o preço variou em 24h, em moedas e em porcentagem. A 
 
 `GET /api/cards` é público (qualquer um navega), paginado (padrão 20, máx. 100) e ordenado por nome. O catálogo é importado de `Data/cards.csv` **somente quando a tabela `Cards` está vazia**, então reiniciar nunca duplica nem sobrescreve cartas. Cada carta tem um `ExternalRef` (ex.: `cards-030`): um **identificador estável que vive no CSV**. O `Id` (GUID) é gerado na importação e por isso muda em cada banco; o `ExternalRef` é o que permite a ferramentas externas, como o script de preços, referenciar uma carta entre bancos.
 
-### 9. Decisões técnicas que vale conhecer
+### 9. Simulação de preços ao vivo atrás de `IPriceProvider`
+
+Os preços automáticos vêm de uma fonte escondida atrás da interface `IPriceProvider` (RF15). Hoje a única implementação é a `SimulatedPriceProvider`; uma fonte externa legítima seria uma nova implementação, sem mudar o resto do sistema.
+
+- O script cria os primeiros 30 dias (um preço por hora). O `PriceSimulationBackgroundService` **continua** esse histórico: ao iniciar, preenche cada hora entre o último preço simulado de cada carta e a hora atual (no máximo 30 dias) e, depois, cria um novo preço por carta a cada hora cheia (UTC) enquanto a API está rodando.
+- Ele continua a partir dos dados, não de uma fórmula. O "nível normal" de uma carta é a média dos últimos 7 dias de preços simulados (sem a alta de sexta); o próximo preço é esse nível, mais a alta de sexta, mais um pequeno ruído que lembra a hora anterior. Assim, o primeiro preço novo fica perto do último, e um preço fixado com a opção `end` do script continua coerente.
+- A mesma carta e a mesma hora sempre dão o mesmo preço (sem estado aleatório escondido), então gerar uma hora duas vezes nunca cria dois valores diferentes.
+- **RN10, o manual prevalece.** O serviço nunca cria um preço simulado em um minuto que já tenha um manual, e o histórico de preços esconde o simulado quando existe um manual no mesmo minuto.
+- Cartas que ainda não têm histórico simulado são ignoradas: o script continua sendo o jeito de criar o histórico inicial.
+- O preço atual é o último snapshot de qualquer origem, então um preço manual é o preço atual só até a próxima hora simulada.
+- O modelo é uma função pura (`Domain/Rules/PriceSimulationRules.cs`), como as regras de alerta. Pode ser desligado com `PriceSimulation:Enabled` (veja [Como rodar](#como-rodar)).
+
+### 10. Decisões técnicas que vale conhecer
 
 - **Enums são gravados como texto em minúsculas** no banco (`buy`, `sell`, `manual`, `simulated`) e expostos como **strings camelCase** no JSON, nunca como números: dados legíveis e contrato claro.
 - **Solução em camadas** (Domain ← Application ← Infrastructure ← API): as regras ficam no domínio/serviços; os controllers só traduzem HTTP.
@@ -122,12 +135,14 @@ A watchlist mostra quanto o preço variou em 24h, em moedas e em porcentagem. A 
 | --- | --- |
 | RN01 | Valor líquido de uma venda = preço de venda × 0,95 (o mercado fica com 5%). |
 | RN02 | Lucro de uma venda = (preço líquido − preço médio de compra) × quantidade. A média considera todas as compras daquela carta até o momento da venda. |
+| RN03 | Lucro total = soma do lucro de todas as vendas (compras contam como zero). |
 | RN04 | A posição aberta de uma carta nunca pode ser negativa em nenhum instante; validada cronologicamente ao criar, editar e apagar trades. |
 | RN05 | A variação de 24h compara o último preço com uma referência (veja decisão 6) e é devolvida em moedas e em porcentagem. |
 | RN06 | Alerta de compra quando `preço <= metaCompra`; alerta de venda quando `preço >= metaVenda`. |
 | RN07 | Um alerta dispara uma vez por cruzamento; é rearmado quando o preço volta ou quando o usuário muda a meta. |
 | RN08 | Preços entre 200 e 15.000.000 moedas; quantidade de trade entre 1 e 100. |
 | RN09 | Uma carta aparece uma vez por watchlist e a meta de compra deve ser menor que a de venda. |
+| RN10 | Um preço manual prevalece sobre o simulado no mesmo minuto (veja a decisão 9). |
 
 ## Arquitetura
 
@@ -159,10 +174,10 @@ flowchart LR
 ```
 FcTradeManager.slnx
 ├── FcTradeManager.API/              Controllers, Program.cs, appsettings, Data/cards.csv, arquivo .http
-├── FcTradeManager.Application/      DTOs e interfaces de serviço
-├── FcTradeManager.Domain/           Entidades, enums e regras puras (Rules/AlertRules.cs)
-├── FcTradeManager.Infrastructure/   AppDbContext, migrations, serviços, BackgroundServices/
-└── FcTradeManager.Tests/            projeto xUnit (helpers de apoio; casos de teste ainda por escrever)
+├── FcTradeManager.Application/      DTOs e interfaces de serviço (incluindo IPriceProvider)
+├── FcTradeManager.Domain/           Entidades, enums e regras puras (Rules/AlertRules.cs, Rules/PriceSimulationRules.cs)
+├── FcTradeManager.Infrastructure/   AppDbContext, migrations, serviços, SimulatedPriceProvider, BackgroundServices/
+└── FcTradeManager.Tests/            testes unitários xUnit (regras, serviços, DTOs, constraints do banco, serviços em segundo plano)
 ```
 
 | Área | Tecnologia |
@@ -171,7 +186,7 @@ FcTradeManager.slnx
 | Web | ASP.NET Core Web API, Swashbuckle (Swagger) |
 | Dados | EF Core 10 + Npgsql, PostgreSQL |
 | Autenticação | JWT Bearer, BCrypt.Net-Next |
-| Trabalho em segundo plano | `BackgroundService` |
+| Trabalho em segundo plano | `BackgroundService` (alertas de preço, simulação de preços ao vivo) |
 | Testes | xUnit, NSubstitute, EF Core SQLite em memória |
 
 ## Banco de dados
@@ -274,7 +289,7 @@ Documentação interativa em `/swagger` no ambiente Development. Enums no JSON s
 | POST | `/api/auth/logout` | Não | Revoga um refresh token (`204`) |
 | GET | `/api/cards` | Não | Busca no catálogo, paginada |
 | GET | `/api/cards/{id}` | Sim | Uma carta |
-| GET | `/api/cards/{cardId}/prices?period=24h` | Sim | Histórico de preços (`24h`, `7d`, `30d`) |
+| GET | `/api/cards/{cardId}/prices?period=24h` | Sim | Histórico de preços (`24h`, `7d`, `30d`); um preço manual esconde o simulado no mesmo minuto (RN10) |
 | POST | `/api/cards/{cardId}/prices` | Sim | Registra um preço manual |
 | GET | `/api/watchlist?sortBy=name` | Sim | Watchlist com preços e variação (`name`, `price`, `change`) |
 | POST | `/api/watchlist` | Sim | Adiciona uma carta com metas |
@@ -372,6 +387,8 @@ Em produção, use variáveis de ambiente: `ConnectionStrings__DefaultConnection
 | `JwtSettings:Issuer` / `Audience` | `FcTradeManager` / `FcTradeManagerClients` | |
 | `JwtSettings:AccessTokenMinutes` | 15 (60 em Development) | |
 | `JwtSettings:RefreshTokenDays` | 7 | |
+| `PriceSimulation:Enabled` | `true` | Desliga a geração de preços ao vivo (o script e os preços manuais continuam funcionando) |
+| `PriceSimulation:FridayBoost` | `true` | Alta de sexta (+8%, caindo até segunda) para cartas com overall ≥ 86, como no script |
 | `Cors:AllowedOrigins` | `[]` (Development: `localhost:3000`, `localhost:5173`) | Adicione a origem do seu front; em produção uma lista vazia gera um aviso e os navegadores são bloqueados |
 
 ### 3. Criar o banco
@@ -420,13 +437,23 @@ Para ter 30 dias de gráficos desde o primeiro dia, um script separado gera o hi
 
 Para mais informações sobre como o script funciona, veja o [repositório dele](https://github.com/fc-trade-manager/price-seed-script). O script não gera preços realistas: ele serve para popular o banco para as demonstrações.
 
+O script serve para o histórico **inicial**. Depois que ele roda, a API mantém esse histórico atualizado sozinha: ao iniciar, as horas que faltam são criadas automaticamente e, em seguida, um novo preço por carta a cada hora cheia (veja a decisão 9). Rodar o script de novo substitui todas as linhas simuladas (preços manuais nunca são tocados), então use-o para a primeira carga ou para recomeçar.
+
 ![Histórico de preços](docs/img/price-history.png)
 
 ## Testes e CI
 
-**Status: em andamento.** O projeto `FcTradeManager.Tests` está ligado à solution (xUnit, NSubstitute, EF Core SQLite em memória) com helpers de apoio (`TestDb`, `Seed`, `ControllerHelper`), mas **ainda não há casos de teste**.
+Os testes unitários ficam em `FcTradeManager.Tests` (xUnit, NSubstitute, EF Core SQLite em memória). Cada teste ganha seu próprio banco em memória, então **não é preciso PostgreSQL** para rodá-los.
 
-Os testes já foram planejados.
+| Pasta | O que cobre |
+| --- | --- |
+| `Rules/` | Regras puras: `AlertRules` (RN06, RN07) e `PriceSimulationRules` (horas cheias, alta de sexta, arredondamento, estado lido do histórico) |
+| `Services/` | Autenticação, trades e cálculo de lucro, watchlist, preços (incluindo a RN10 no histórico), alertas, carga do catálogo, `SimulatedPriceProvider` |
+| `BackgroundServices/` | `PriceAlertBackgroundService` (um ciclo por vez) e `PriceSimulationBackgroundService` (preenchimento de lacunas, sem duplicar, limite de 30 dias, RN10) |
+| `Data/` | Constraints do banco (índices únicos, campos obrigatórios) |
+| `Dtos/` | Atributos de validação (faixas da RN08, nome de usuário e de exibição) |
+
+Suítes de API (Postman), ponta a ponta (Playwright) e de performance (k6) estão planejadas em repositórios separados; veja a [página da organização](https://github.com/fc-trade-manager).
 
 ```bash
 dotnet test
@@ -437,15 +464,16 @@ O GitHub Actions (`.github/workflows/ci.yml`) restaura, compila e testa a cada p
 ## Limitações conhecidas e roadmap
 
 - **Os preços são globais** e qualquer usuário autenticado pode registrá-los (aceitável para uso pessoal/demo), mas em versões futuras só o admin poderá alterar preços.
-- **Ainda sem testes reais**.
-- As migrations não são aplicadas automaticamente; ainda não há Docker Compose nem `.env.example`. Isso será feito quando o front-end e a suíte de testes estiverem prontos.
+- As migrations não são aplicadas automaticamente; ainda não há Docker Compose nem `.env.example` (planejado).
 - Sem rate limiting; refresh tokens expirados/revogados nunca são removidos.
 - O parser de CSV é mínimo (separa por vírgula, sem aspas).
 - Alertas comparam com o último snapshot, qualquer que seja sua idade.
 - Os nomes dos campos da watchlist diferem entre criação e atualização (veja [API](#api)).
+- Os preços simulados são gerados para toda carta que tenha histórico simulado, não só para as da watchlist.
+- As opções `noise` e `boost` por carta do script não são conhecidas pelo gerador ao vivo; use `PriceSimulation:FridayBoost` para desligar a alta de sexta em todas as cartas.
 - Não implementado: trocar senha / excluir conta, notificações por e-mail ou em tempo real, exportar CSV.
 
-Roadmap: testes, front-end em React (repositório separado), Docker Compose, testes de API com Postman, deploy, job de simulação de preços ao vivo.
+Roadmap: Docker Compose, health check e logs estruturados, testes de API com Postman, suítes ponta a ponta (Playwright) e de performance (k6) em repositórios separados, deploy público.
 
 ## Créditos
 
