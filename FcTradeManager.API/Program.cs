@@ -27,6 +27,9 @@ builder.Services.AddScoped<IPriceService, PriceService>();
 builder.Services.AddScoped<TradeCalculationService>();
 builder.Services.AddScoped<ITradeService, TradeService>();
 builder.Services.AddScoped<IAlertService, AlertService>();
+builder.Services.Configure<PriceSimulationOptions>(builder.Configuration.GetSection("PriceSimulation"));
+builder.Services.AddSingleton<IPriceProvider, SimulatedPriceProvider>(); // RF15: swap the source of prices here
+builder.Services.AddHostedService<PriceSimulationBackgroundService>();
 builder.Services.AddHostedService<PriceAlertBackgroundService>();
 
 var jwtSettings = builder.Configuration.GetSection("JwtSettings");
